@@ -3,6 +3,8 @@ import sys
 import os
 import glob
 import json
+import re
+import requests
 
 # defines =====================
 
@@ -13,6 +15,7 @@ PROFILE_KEY = 'profile'
 REAL_NAME_KEY = 'real_name'
 DISPLAY_NAME_KEY = 'display_name'
 FILES_KEY = 'files'
+FILE_NAME_KEY = 'name'
 URL_KEY = 'url_private'
 
 OUT_PUT_DIR_NAME = 'slack_csv_output'
@@ -36,7 +39,7 @@ def get_users(source_dir):
     users = {}
 
     for user in users_json:
-        
+
         name = user[PROFILE_KEY][DISPLAY_NAME_KEY]
         if not name:
             name = user[PROFILE_KEY][REAL_NAME_KEY]
@@ -49,8 +52,13 @@ def get_users(source_dir):
 def get_line_text(users, item):
 
     text = f'{item[TEXT_KEY]}'.replace('"', '\"')
+
+    for user_id in users.keys():
+
+        text = f'{text}'.replace(f'<@{user_id}>', f'<@{users[user_id]}>')
+
     name = ''
-    
+
     if USER_KEY in item.keys():
         user_id = item[USER_KEY]
         if user_id in users.keys():
@@ -66,6 +74,23 @@ def get_line_text(users, item):
 
             url = f"{attachmentFile[URL_KEY]}".replace('"', '\"')
             urls += f'{url}\n'
+
+            if url.startswith('https://files.slack.com/files-'):
+
+                out_files_path = f'{output_dir}/{channel}/files'
+
+                if not os.path.exists(out_files_path):
+                    os.makedirs(out_files_path)
+
+                file_id = re.findall('^\w{3}/([^/]+)/', url.replace('https://files.slack.com/files-', ''))
+
+                if not os.path.exists(f'{output_dir}/{channel}/files/{file_id[0]}'):
+                    os.makedirs(f'{output_dir}/{channel}/files/{file_id[0]}')
+
+                urlData = requests.get(url).content
+
+                with open(f'{output_dir}/{channel}/files/{file_id[0]}/{attachmentFile[FILE_NAME_KEY]}', mode='wb') as f:
+                    f.write(urlData)
 
     return f'{date},{name},"{text}","{urls}"\n'
 
@@ -101,20 +126,22 @@ os.makedirs(output_dir)
 
 # jsonファイルを省いたチャンネル名のフォルダ一覧の取得
 channels = sorted(os.listdir(path=source_dir))
-channels = [x for x in channels if not x.endswith('.json')] 
+channels = [x for x in channels if not x.endswith('.json')]
 
 users = get_users(f'{source_dir}/{USER_FILE_NAME}')
 
 # channelフォルダ単位でループ
-for channel in channels: 
+for channel in channels:
 
     print(f'[{channel}]')
 
     json_files = sorted(glob.glob(f"{source_dir}/{channel}/*.json"))
     lines = "date,name,text,files\n"
 
+    os.makedirs(f'{output_dir}/{channel}')
+
     # 日付名のjsonファイル単位でループ
-    for file_full_path in json_files: 
+    for file_full_path in json_files:
 
         file_name = os.path.split(file_full_path)[1]
         date = file_name.replace('.json', '')
@@ -122,7 +149,7 @@ for channel in channels:
         json_dic = json_file_to_data(file_full_path)
 
         # メッセージ単位ループ
-        for item in json_dic: 
+        for item in json_dic:
 
             if not TEXT_KEY in item.keys():
                 continue
@@ -132,7 +159,7 @@ for channel in channels:
         print(f'\t{date} ({len(json_dic)})')
 
     # 変換した情報をチャンネル名のcsvファイルに書き込み
-    out_file_path = f"{output_dir}/{channel}.csv"
+    out_file_path = f'{output_dir}/{channel}/{channel}.csv'
     f = open(out_file_path, 'w')
     f.write(lines)
     f.close()
